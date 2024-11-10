@@ -8,7 +8,7 @@ import time
 from xlsxwriter import Workbook
 
 # Load configuration from YAML file
-with open('../config.yaml', 'r') as file:
+with open('../python/config.yaml', 'r') as file:
     config = yaml.safe_load(file)
 
 # Database connection parameters
@@ -24,7 +24,7 @@ conn = psycopg2.connect(
 )
 
 # Define query parameters
-query_limit = config.get('query_mitie_limit', 2500000)
+query_limit = config.get('query_spacy_limit', 2500000)
 offset = config.get('offset', 0)
 query_text = 'gold mine'
 
@@ -36,17 +36,10 @@ nlp = spacy.load("en_core_web_sm")
 
 # Function to clean text: removes URLs, HTML tags, punctuation, numbers, and extra whitespace
 def clean_text(text):
-    # Remove URLs
-    text = re.sub(r'https?://\S+|www\.\S+', '', text)
-    
-    # Remove HTML tags
-    text = BeautifulSoup(text, "html.parser").get_text()
-    
-    # Remove punctuation, digits, and non-printable characters
+    text = re.sub(r'https?://\S+|www\.\S+', '', text)  # Remove URLs
+    text = BeautifulSoup(text, "html.parser").get_text()  # Remove HTML tags
     text = re.sub(r'[^a-zA-Z\s]', '', text)  # Keep only letters and spaces
-    text = re.sub(r'\s+', ' ', text).strip()  # Remove extra whitespace
-
-    return text
+    return re.sub(r'\s+', ' ', text).strip()  # Remove extra whitespace
 
 # Start processing
 start_time = time.time()
@@ -58,37 +51,20 @@ result = cursor.fetchall()
 
 # Collect entities and counts
 unique_entities = set()
-all_entities = []
 type_counts = {}
 total_count = 0
 
 # Process each story in the results
 for row in result:
-    story_id = row[0]
-    text = row[1]
-    
-    # Clean the story text
-    cleaned_text = clean_text(text)
-    
-    # Process cleaned text with spaCy NER
-    doc = nlp(cleaned_text)
-    
+    text = clean_text(row[1])  # Clean the story text
+    doc = nlp(text)  # Process cleaned text with spaCy NER
+
     # Extract and store relevant entities
     for ent in doc.ents:
         if ent.label_ in ['ORG', 'GPE', 'PERSON']:
-            entity = {
-                'text': ent.text.strip(),
-                'tag': ent.label_,
-                'story_id': story_id
-            }
-            all_entities.append(entity)
-            
-            # Update counts for summary
+            unique_entities.add((ent.text.strip(), ent.label_))  # Add to unique entities
             type_counts[ent.label_] = type_counts.get(ent.label_, 0) + 1
             total_count += 1
-            
-            # Add to unique entities
-            unique_entities.add((ent.text.strip(), ent.label_))
 
 # Prepare Excel file with multiple sheets
 workbook = Workbook("recognized_entities_spacy.xlsx")
@@ -99,13 +75,7 @@ unique_entities_sheet.write_row(0, 0, ["Entity", "Tag"])
 for idx, (text, tag) in enumerate(unique_entities, start=1):
     unique_entities_sheet.write_row(idx, 0, [text, tag])
 
-# Sheet 2: All Entities with Story ID
-all_entities_sheet = workbook.add_worksheet("All Entities with Story ID")
-all_entities_sheet.write_row(0, 0, ["Entity", "Tag", "Story ID"])
-for idx, entity in enumerate(all_entities, start=1):
-    all_entities_sheet.write_row(idx, 0, [entity['text'], entity['tag'], entity['story_id']])
-
-# Sheet 3: Summary
+# Sheet 2: Summary
 summary_sheet = workbook.add_worksheet("Summary")
 summary_sheet.write_row(0, 0, ["Tag", "Count"])
 for idx, (tag, count) in enumerate(type_counts.items(), start=1):
